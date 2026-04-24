@@ -2,15 +2,43 @@
 '''
 Load client: connects to all alive servers, prints per-node loads and the
 cluster-wide averages (1, 5, 15 min).
-Usage: python3 client.py [port] [machines_file]
+
+Machine list is fetched live from the Telecom Paris API. Falls back to a
+local file if the API is unreachable.
+
+Usage: python3 client.py [port] [max_machines]
 '''
 import concurrent.futures
+import json
 import socket
 import sys
+import time
+import urllib.request
 
-PORT = int(sys.argv[1]) if len(sys.argv) > 1 else 54321
-MACHINES_FILE = sys.argv[2] if len(sys.argv) > 2 else 'machines_alive.txt'
-TIMEOUT = 5
+PORT          = int(sys.argv[1]) if len(sys.argv) > 1 else 54321
+MAX_MACHINES  = int(sys.argv[2]) if len(sys.argv) > 2 else 100
+TIMEOUT       = 5
+API_URL       = "https://tp.telecom-paris.fr/ajax.php?_="
+FALLBACK_FILE = "machines_alive.txt"
+
+
+def get_machines(max_count: int = 100) -> list:
+    """Fetch online machine hostnames from the Telecom Paris API."""
+    url = API_URL + str(int(time.time() * 1000))
+    try:
+        req = urllib.request.Request(url, headers={"Accept": "application/json"})
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            data = json.loads(resp.read().decode("utf-8"))
+        available = [entry[0] for entry in data["data"] if entry[1] is True]
+        return available[:max_count]
+    except Exception as e:
+        print(f"[WARN] API request failed ({e}), falling back to {FALLBACK_FILE}")
+        try:
+            with open(FALLBACK_FILE) as f:
+                return [l.strip() for l in f if l.strip()][:max_count]
+        except FileNotFoundError:
+            print(f"error: {FALLBACK_FILE} not found and API unreachable.")
+            sys.exit(1)
 
 
 def query(host):
@@ -41,12 +69,9 @@ def query(host):
 
 
 def main():
-    try:
-        with open(MACHINES_FILE) as f:
-            machines = [l.strip() for l in f if l.strip()]
-    except FileNotFoundError:
-        print(f'error: {MACHINES_FILE} not found. Run ./deploy.sh first.')
-        sys.exit(1)
+    print(f"Fetching up to {MAX_MACHINES} available machines from API...")
+    machines = get_machines(MAX_MACHINES)
+    print(f"Got {len(machines)} machines.\n")
 
     print(f'Connecting to {len(machines)} machines on port {PORT}...\n')
     results, failed = [], []
